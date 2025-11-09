@@ -37,87 +37,108 @@ except Exception:
 # -------------------------
 # Shared storage (thread-safe)
 # -------------------------
-telemetry_lock = threading.Lock()
-telemetry_store = {}                # vehicle_id -> last telemetry dict
+@st.cache_resource
+def get_shared_stores():
+    """Initialize shared storage - runs only once per Streamlit server"""
+    return {
+        "telemetry": {},
+        "telemetry_lock": threading.Lock(),
+        "alerts": deque(maxlen=300),
+        "alerts_lock": threading.Lock(),
+        "agent_activity": deque(maxlen=200),
+        "agent_activity_lock": threading.Lock()
+    }
 
-alerts_lock = threading.Lock()
-alerts_store = deque(maxlen=300)    # recent alerts
-
-agent_activity_lock = threading.Lock()
-agent_activity = deque(maxlen=200)  # agent logs
+stores = get_shared_stores()
+telemetry_store = stores["telemetry"]
+telemetry_lock = stores["telemetry_lock"]
+alerts_store = stores["alerts"]
+alerts_lock = stores["alerts_lock"]
+agent_activity = stores["agent_activity"]
+agent_activity_lock = stores["agent_activity_lock"]
 
 # -------------------------
 # Kafka listener thread
 # -------------------------
-def kafka_listener():
-    """
-    Background thread: consumes from vehicle & alert topics,
-    updates telemetry_store and alerts_store.
-    """
-    try:
-        consumer = KafkaConsumer(
-            VEHICLE_TOPIC,
-            ALERT_TOPIC,
-            bootstrap_servers=[KAFKA_BOOTSTRAP_SERVERS],
-            auto_offset_reset="latest",  # change to "earliest" for debugging
-            enable_auto_commit=True,
-            group_id=f"{GROUP_ID}-dashboard",
-            value_deserializer=lambda m: json.loads(m.decode("utf-8"))
-        )
-        logger.info("[dashboard] Kafka consumer started")
-    except Exception as e:
-        logger.exception(f"[dashboard] Kafka consumer failed to start: {e}")
-        return
-
-    try:
-        for msg in consumer:
-            topic = msg.topic
-            value = msg.value
-
-            if topic == VEHICLE_TOPIC:
-                vid = value.get("vehicle_id", "UNKNOWN")
-                value["_received_at"] = datetime.now(timezone.utc).isoformat() + "Z"
-                with telemetry_lock:
-                    telemetry_store[vid] = value
-
-            elif topic == ALERT_TOPIC:
-                alert = {
-                    "vehicle_id": value.get("vehicle_id", "UNKNOWN"),
-                    "timestamp": value.get("timestamp", datetime.now(timezone.utc).isoformat() + "Z"),
-                    "message": value.get("message", value.get("issue", str(value))),
-                    "telemetry": value.get("telemetry", {})
-                }
-                with alerts_lock:
-                    alerts_store.appendleft(alert)
-
-                # Log UEBA-style entry
-                ulog = {
-                    "time": datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S"),
-                    "agent": "AnalysisAgent",
-                    "action": "published_alert",
-                    "vehicle_id": alert["vehicle_id"],
-                    "message": alert["message"]
-                }
-                with agent_activity_lock:
-                    agent_activity.appendleft(ulog)
-
-            else:
-                logger.info(f"[dashboard] Unknown topic: {topic}")
-    except Exception as e:
-        logger.exception(f"[dashboard] Kafka listener error: {e}")
-    finally:
+@st.cache_resource
+def start_kafka_listener_thread():
+    """Start Kafka listener thread - runs only once per Streamlit server"""
+    def kafka_listener():
+        """
+        Background thread: consumes from vehicle & alert topics,
+        updates telemetry_store and alerts_store.
+        """
+        stores = get_shared_stores()
+        telemetry_store = stores["telemetry"]
+        telemetry_lock = stores["telemetry_lock"]
+        alerts_store = stores["alerts"]
+        alerts_lock = stores["alerts_lock"]
+        agent_activity = stores["agent_activity"]
+        agent_activity_lock = stores["agent_activity_lock"]
+        
         try:
-            consumer.close()
-        except Exception:
-            pass
-        logger.info("[dashboard] Kafka consumer stopped")
+            consumer = KafkaConsumer(
+                VEHICLE_TOPIC,
+                ALERT_TOPIC,
+                bootstrap_servers=[KAFKA_BOOTSTRAP_SERVERS],
+                auto_offset_reset="earliest",  # Read from beginning to see all messages
+                enable_auto_commit=True,
+                group_id=f"{GROUP_ID}-dashboard",
+                value_deserializer=lambda m: json.loads(m.decode("utf-8"))
+            )
+            logger.info("[dashboard] Kafka consumer started")
+        except Exception as e:
+            logger.exception(f"[dashboard] Kafka consumer failed to start: {e}")
+            return
 
-# Start listener thread once
-if "kafka_thread_started" not in st.session_state:
+        try:
+            for msg in consumer:
+                topic = msg.topic
+                value = msg.value
+
+                if topic == VEHICLE_TOPIC:
+                    vid = value.get("vehicle_id", "UNKNOWN")
+                    value["_received_at"] = datetime.now(timezone.utc).isoformat() + "Z"
+                    with telemetry_lock:
+                        telemetry_store[vid] = value
+
+                elif topic == ALERT_TOPIC:
+                    alert = {
+                        "vehicle_id": value.get("vehicle_id", "UNKNOWN"),
+                        "timestamp": value.get("timestamp", datetime.now(timezone.utc).isoformat() + "Z"),
+                        "message": value.get("message", value.get("issue", str(value))),
+                        "telemetry": value.get("telemetry", {})
+                    }
+                    with alerts_lock:
+                        alerts_store.appendleft(alert)
+
+                    # Log UEBA-style entry
+                    ulog = {
+                        "time": datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S"),
+                        "agent": "AnalysisAgent",
+                        "action": "published_alert",
+                        "vehicle_id": alert["vehicle_id"],
+                        "message": alert["message"]
+                    }
+                    with agent_activity_lock:
+                        agent_activity.appendleft(ulog)
+
+        except Exception as e:
+            logger.exception(f"[dashboard] Kafka listener error: {e}")
+        finally:
+            try:
+                consumer.close()
+            except Exception:
+                pass
+            logger.info("[dashboard] Kafka consumer stopped")
+    
     t = threading.Thread(target=kafka_listener, daemon=True, name="dashboard-kafka-listener")
     t.start()
-    st.session_state["kafka_thread_started"] = True
     logger.info("[dashboard] Started kafka listener thread")
+    return t
+
+# Start the thread (cached, so it only runs once)
+kafka_thread = start_kafka_listener_thread()
 
 # -------------------------
 # Predictive rules (simple demo)
@@ -192,7 +213,12 @@ if page == "Overview":
         df = pd.DataFrame.from_dict(local_telemetry, orient='index')
         if "_received_at" in df.columns:
             df = df.drop(columns=["_received_at"])
-        st.dataframe(df.reset_index().rename(columns={"index": "vehicle_id"}), use_container_width=True)
+        # Reset index and add as column only if 'vehicle_id' not already in columns
+        if 'vehicle_id' not in df.columns:
+            df = df.reset_index().rename(columns={"index": "vehicle_id"})
+        else:
+            df = df.reset_index(drop=True)
+        st.dataframe(df, width="stretch")
 
 # ---------- PAGE: Vehicle Telemetry ----------
 elif page == "Vehicle Telemetry":
@@ -217,7 +243,7 @@ elif page == "Vehicle Telemetry":
         fig.add_trace(go.Scatter(x=times, y=temp, name="Engine Temp (°C)"))
         fig.add_trace(go.Scatter(x=times, y=speed, name="Speed (km/h)"))
         fig.update_layout(height=350, xaxis_title="Samples", yaxis_title="Value")
-        st.plotly_chart(fig, use_container_width=True)
+        st.plotly_chart(fig, width="stretch")
 
 # ---------- PAGE: Predictive Maintenance ----------
 elif page == "Predictive Maintenance":
@@ -238,7 +264,7 @@ elif page == "Predictive Maintenance":
         st.success("No immediate predictive issues detected across fleet.")
     else:
         df_issues = pd.DataFrame(rows).sort_values(by=["score"], ascending=False)
-        st.dataframe(df_issues, use_container_width=True)
+        st.dataframe(df_issues, width="stretch")
 
 # ---------- PAGE: Customer Scheduling ----------
 elif page == "Customer Scheduling":
@@ -259,7 +285,7 @@ elif page == "Customer Scheduling":
         {"vehicle_id": "VEH1001", "suggested_service": "Brake Check", "proposed_date": "2025-11-03", "status": "Confirmed"},
         {"vehicle_id": "VEH1002", "suggested_service": "Battery Replacement", "proposed_date": "2025-11-05", "status": "Pending"}
     ]
-    st.dataframe(pd.DataFrame(scheduled), use_container_width=True)
+    st.dataframe(pd.DataFrame(scheduled), width="stretch")
 
 # ---------- PAGE: Manufacturing Insights ----------
 elif page == "Manufacturing Insights":
@@ -281,9 +307,9 @@ elif page == "Manufacturing Insights":
 
     if comp_counter:
         comp_df = pd.DataFrame(list(comp_counter.items()), columns=["Component", "Failure Frequency"]).sort_values("Failure Frequency", ascending=False)
-        st.dataframe(comp_df, use_container_width=True)
+        st.dataframe(comp_df, width="stretch")
         fig = px.bar(comp_df, x="Component", y="Failure Frequency", title="Component Failure Frequency")
-        st.plotly_chart(fig, use_container_width=True)
+        st.plotly_chart(fig, width="stretch")
     else:
         st.info("No manufacturing feedback yet (no alerts collected).")
 
@@ -294,7 +320,7 @@ elif page == "UEBA Security":
         st.info("No agent activity collected yet.")
     else:
         df_agents = pd.DataFrame(recent_agent_logs)
-        st.dataframe(df_agents, use_container_width=True)
+        st.dataframe(df_agents, width="stretch")
 
 # ---------- Footer + Debug ----------
 st.markdown("---")
@@ -302,10 +328,10 @@ st.caption(
     f"Data last updated: {datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M:%SZ')} — Kafka Broker: {KAFKA_BOOTSTRAP_SERVERS}"
 )
 
-with st.expander("🔍 Debug Info"):
-    st.write("Telemetry store size:", len(telemetry_store))
-    st.write("Alert store size:", len(alerts_store))
-    st.write("Agent activity size:", len(agent_activity))
+with st.expander("🔍 System Info"):
+    st.write("Active vehicles:", len(telemetry_store))
+    st.write("Recent alerts:", len(alerts_store))
+    st.write("Agent activities:", len(agent_activity))
 
 # Auto-refresh
 st.markdown(f"<meta http-equiv='refresh' content='{refresh_rate}'>", unsafe_allow_html=True)
