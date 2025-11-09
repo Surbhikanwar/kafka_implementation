@@ -1,110 +1,170 @@
-# Real-Time Vehicle Data Analysis with Kafka and Streamlit
+# 🚗 Real-Time Vehicle Telemetry System
 
-This project is a real-time data processing pipeline that simulates, ingests, analyzes, and visualizes vehicle data using Apache Kafka and Streamlit.
+A real-time data processing pipeline that simulates vehicle telemetry, analyzes performance metrics, detects anomalies, and visualizes insights through an interactive dashboard powered by Apache Kafka and Streamlit.
 
-## Features
+---
 
-- **Real-time Data Ingestion:** Produces mock vehicle data and sends it to a Kafka topic.
-- **Data Analysis:** Consumes data from Kafka, applies rules to it, and identifies anomalies.
-- **Interactive Dashboard:** A Streamlit-based dashboard to visualize the real-time data and analysis results.
-- **Dockerized Services:** Kafka and Zookeeper are managed using Docker Compose for easy setup.
+## ✨ Features
 
-## Architecture
+- **Real-Time Data Streaming** — Simulates and streams vehicle telemetry data (speed, engine temperature, fuel level, vibration, battery voltage) to Kafka topics
+- **Anomaly Detection** — Analyzes incoming data using rule-based engine to identify overspeeding, overheating, and other critical issues
+- **Live Dashboard** — Interactive Streamlit dashboard displaying real-time vehicle metrics, alerts, and predictive maintenance insights
+- **Dockerized Infrastructure** — Kafka and Zookeeper managed via Docker Compose for seamless setup and deployment
 
-The project follows a microservices-based architecture:
+---
 
-- **Data Ingestion:** A Python script (`vehicle_producer.py`) generates mock vehicle data and sends it to a Kafka topic.
-- **Data Analysis:** A separate Python script (`analysis_agent.py`) consumes the data from the Kafka topic, processes it using a rules engine, and sends the results to another Kafka topic.
-- **Dashboard:** A Streamlit application (`dashboard_app.py`) consumes the processed data from the results topic and displays it in a real-time dashboard.
-- **Message Bus:** Apache Kafka is used as the message bus for communication between the services.
-- **Orchestration:** A master agent is responsible for orchestrating the different agents in the system.
+## 🏗️ Architecture
 
-## Getting Started
+The system follows a microservices architecture with event-driven communication:
 
-These instructions will get you a copy of the project up and running on your local machine for development and testing purposes.
+| Component | Description |
+|-----------|-------------|
+| **Producer** | Generates mock vehicle telemetry and publishes to `vehicle.telematics` topic |
+| **Analysis Agent** | Consumes telemetry data, applies business rules, and publishes alerts to `vehicle.alerts` topic |
+| **Dashboard** | Real-time Streamlit app consuming both topics to visualize metrics and alerts |
+| **Message Bus** | Apache Kafka handles asynchronous communication between services |
+
+```
+Vehicle Producer → Kafka (vehicle.telematics) → Analysis Agent → Kafka (vehicle.alerts) → Dashboard
+                                                       ↓
+                                                   Dashboard
+```
+
+---
+
+## 🚀 Quick Start
 
 ### Prerequisites
 
-- Docker and Docker Compose
-- Python 3.9+
+- **Docker & Docker Compose** — For Kafka infrastructure
+- **Python 3.9+** — For running application services
 
 ### Installation
 
-1.  **Clone the repository:**
-
-    ```bash
-    git clone https://github.com/your-username/kafka_implementation.git
-    cd kafka_implementation
-    ```
-
-2.  **Create a virtual environment and install dependencies:**
-
-    ```bash
-    python -m venv venv
-    source venv/bin/activate  # On Windows, use `venv\Scripts\activate`
-    pip install -r requirements.txt
-    ```
-
-3.  **Start the Kafka and Zookeeper services:**
-
-    ```bash
-    docker-compose up -d
-    ```
-
-### Running the Application
-
-1.  **Start the data ingestion service:**
-
-    ```bash
-    python -m data_ingestion.vehicle_producer
-    ```
-
-2.  **Start the data analysis service:**
-
-    ```bash
-    python -m data_analysis.analysis_agent
-    ```
-
-3.  **Start the dashboard:**
-
-    ```bash
-    streamlit run dashboard/dashboard_app.py
-    ```
-
-## Project Structure
-
-```
-.
-├── data_ingestion
-│   ├── vehicle_producer.py   # Produces mock vehicle data to Kafka
-│   └── ...
-├── data_analysis
-│   ├── analysis_agent.py     # Consumes and analyzes vehicle data
-│   └── rules_engine.py       # Defines rules for data analysis
-├── dashboard
-│   ├── dashboard_app.py      # Streamlit dashboard application
-│   └── ...
-├── master_agent
-│   └── orchestrator.py       # Orchestrates the different agents
-├── docker-compose.yml        # Docker Compose file for Kafka and Zookeeper
-├── requirements.txt          # Python dependencies
-└── README.md
+**1. Clone and Setup**
+```bash
+git clone https://github.com/Surbhikanwar/kafka_implementation.git
+cd kafka_implementation
 ```
 
-## Usage
+**2. Create Virtual Environment**
+```bash
+# Windows
+python -m venv venv
+venv\Scripts\activate
 
-Once the application is running, you can:
+# Linux/Mac
+python3 -m venv venv
+source venv/bin/activate
+```
 
--   **View the real-time data:** Open the Streamlit dashboard in your browser to see the vehicle data being processed and visualized in real-time.
--   **Extend the analysis:** Modify the `rules_engine.py` to add your own custom rules for data analysis.
--   **Customize the dashboard:** Edit the `dashboard_app.py` to change the layout and visualizations of the dashboard.
+**3. Install Dependencies**
+```bash
+pip install -r requirements.txt
+```
 
-## Built With
+**4. Start Kafka Infrastructure**
+```bash
+docker-compose up -d
+```
 
--   [Apache Kafka](https://kafka.apache.org/) - Distributed streaming platform
--   [Streamlit](https://streamlit.io/) - The fastest way to build data apps in Python
--   [Docker](https://www.docker.com/) - Containerization platform
--   [Python](https://www.python.org/) - Programming language
--   [Pandas](https://pandas.pydata.org/) - Data manipulation and analysis library
--   [Numpy](https://numpy.org/) - Library for numerical computing
+### Running the System
+
+Open **three separate terminals** and run each command:
+
+**Terminal 1: Start Producer**
+```bash
+python -m data_ingestion.vehicle_producer --count 3 --interval 2
+```
+
+**Terminal 2: Start Analysis Agent**
+```bash
+python -m data_analysis.analysis_agent
+```
+
+**Terminal 3: Start Dashboard**
+```bash
+streamlit run dashboard/dashboard_app.py
+```
+
+The dashboard will automatically open in your browser at `http://localhost:8501`
+
+---
+
+## 📁 Project Structure
+
+```
+kafka_implementation/
+│
+├── 📂 data_ingestion/
+│   ├── vehicle_producer.py      # Generates and publishes vehicle telemetry
+│   ├── mock_vehicle_data.py     # Mock data generation logic
+│   └── kafka_config.py          # Kafka connection settings
+│
+├── 📂 data_analysis/
+│   ├── analysis_agent.py        # Consumes and analyzes telemetry
+│   └── rules_engine.py          # Business rules for anomaly detection
+│
+├── 📂 dashboard/
+│   ├── dashboard_app.py         # Streamlit dashboard application
+│   ├── consumer_agent.py        # Dashboard Kafka consumer
+│   └── producer_agent.py        # Alert producer
+│
+├── 📂 master_agent/
+│   ├── orchestrator.py          # Service orchestration
+│   └── registry.py              # Agent registry
+│
+├── 📂 utils/
+│   ├── config.py                # Configuration management
+│   └── logger.py                # Logging utilities
+│
+├── docker-compose.yml           # Kafka & Zookeeper configuration
+├── requirements.txt             # Python dependencies
+└── README.md                    # This file
+```
+
+---
+
+## 📊 Dashboard Features
+
+Once running, the dashboard provides:
+
+- **Overview** — System metrics, active vehicles, alerts count
+- **Vehicle Telemetry** — Real-time sensor data for each vehicle
+- **Predictive Maintenance** — AI-driven maintenance recommendations
+- **Customer Scheduling** — Automated service appointment suggestions
+- **Manufacturing Insights** — Component failure analysis
+- **UEBA Security** — Agent behavior monitoring
+
+---
+
+## 🛠️ Built With
+
+| Technology | Purpose |
+|------------|---------|
+| [Apache Kafka](https://kafka.apache.org/) | Distributed event streaming platform |
+| [Streamlit](https://streamlit.io/) | Interactive data visualization dashboard |
+| [Docker](https://www.docker.com/) | Containerization and orchestration |
+| [Python 3.9+](https://www.python.org/) | Core programming language |
+| [Pandas](https://pandas.pydata.org/) | Data manipulation and analysis |
+| [Plotly](https://plotly.com/) | Interactive charts and graphs |
+
+---
+
+## 📝 License
+
+This project is open source and available under the MIT License.
+
+---
+
+## 👤 Author
+
+**Surbhi Kanwar**
+- GitHub: [@Surbhikanwar](https://github.com/Surbhikanwar)
+
+---
+
+## 🤝 Contributing
+
+Contributions, issues, and feature requests are welcome! Feel free to check the [issues page](https://github.com/Surbhikanwar/kafka_implementation/issues).
 
